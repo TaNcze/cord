@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "coordscreenshot",
+  "version": "1.0.0",
+  "name": "Coord Screenshot",
+  "description": "Robi screenshoty z nałożonymi współrzędnymi gracza (nawet bez włączonych cordów).",
+  "authors": ["YourName"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.coordscreenshot.CoordScreenshotClient"
+    ]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21",
+    "java": ">=21"
+  }
+}
