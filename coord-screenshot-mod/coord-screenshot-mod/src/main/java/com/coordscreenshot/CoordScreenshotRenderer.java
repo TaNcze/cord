@@ -1,17 +1,13 @@
 package com.coordscreenshot;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.SimpleFramebuffer;
-import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.text.Text;
 
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
@@ -20,111 +16,93 @@ import java.util.Date;
 public class CoordScreenshotRenderer {
 
     public static boolean pendingScreenshot = false;
-    public static String coordText = "";
     public static double playerX, playerY, playerZ;
     public static String dimension = "";
 
-    private static boolean overlayVisible = false;
-    private static int overlayTimer = 0;
-
     public static void register() {
         HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
+            if (!pendingScreenshot) return;
+            pendingScreenshot = false;
+
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null) return;
 
-            // Always draw overlay if timer active (for screenshot delay)
-            if (overlayTimer > 0) {
-                drawCoordsOverlay(drawContext, client);
-                overlayTimer--;
+            // Krótkie opóźnienie żeby frame był gotowy
+            new Thread(() -> {
+                try { Thread.sleep(50); } catch (InterruptedException ignored) {}
 
-                // Take the actual screenshot on frame 2 (gives time to render overlay)
-                if (overlayTimer == 1) {
-                    captureScreenshot(client);
+                try {
+                    captureWithCoords(client);
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
-                return;
-            }
-
-            // Trigger overlay when screenshot requested
-            if (pendingScreenshot) {
-                pendingScreenshot = false;
-                overlayTimer = 3; // show for 3 frames, capture on frame 2
-            }
+            }).start();
         });
     }
 
-    private static void drawCoordsOverlay(DrawContext drawContext, MinecraftClient client) {
-        TextRenderer textRenderer = client.textRenderer;
-        int screenWidth = client.getWindow().getScaledWidth();
-        int screenHeight = client.getWindow().getScaledHeight();
+    private static void captureWithCoords(MinecraftClient client) throws IOException {
+        // Pobierz screenshot z framebuffera
+        Framebuffer framebuffer = client.getFramebuffer();
+        NativeImage nativeImage = ScreenshotCapture.takeScreenshot(framebuffer);
 
-        // Background panel
-        int padding = 6;
-        int lineHeight = 12;
-        int panelWidth = 320;
-        int panelHeight = 14 * 4 + padding * 2;
-        int panelX = 5;
-        int panelY = screenHeight - panelHeight - 5;
+        int width = nativeImage.getWidth();
+        int height = nativeImage.getHeight();
 
-        // Draw semi-transparent background
-        drawContext.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xBB000000);
-
-        // Draw border
-        drawContext.fill(panelX, panelY, panelX + panelWidth, panelY + 1, 0xFF55FFFF);
-        drawContext.fill(panelX, panelY, panelX + 1, panelY + panelHeight, 0xFF55FFFF);
-        drawContext.fill(panelX + panelWidth - 1, panelY, panelX + panelWidth, panelY + panelHeight, 0xFF55FFFF);
-        drawContext.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight, 0xFF55FFFF);
-
-        int textX = panelX + padding;
-        int textY = panelY + padding;
-
-        // Title
-        drawContext.drawTextWithShadow(textRenderer,
-                Text.literal("§b§l📍 Coordinates"),
-                textX, textY, 0xFFFFFF);
-        textY += lineHeight + 2;
-
-        // XYZ
-        drawContext.drawTextWithShadow(textRenderer,
-                Text.literal(String.format("§fX: §e%.2f  §fY: §e%.2f  §fZ: §e%.2f", playerX, playerY, playerZ)),
-                textX, textY, 0xFFFFFF);
-        textY += lineHeight;
-
-        // Block coords
-        drawContext.drawTextWithShadow(textRenderer,
-                Text.literal(String.format("§fBlock: §a%d, %d, %d",
-                        (int)Math.floor(playerX), (int)Math.floor(playerY), (int)Math.floor(playerZ))),
-                textX, textY, 0xFFFFFF);
-        textY += lineHeight;
-
-        // Dimension + timestamp
-        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
-        drawContext.drawTextWithShadow(textRenderer,
-                Text.literal("§fDim: §d" + dimension + "  §7" + timestamp),
-                textX, textY, 0xFFFFFF);
-    }
-
-    private static void captureScreenshot(MinecraftClient client) {
-        File screenshotsDir = new File(client.runDirectory, "screenshots");
-        if (!screenshotsDir.exists()) screenshotsDir.mkdirs();
-
-        String filename = "coords_" + new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss").format(new Date()) + ".png";
-        File outputFile = new File(screenshotsDir, filename);
-
-        try {
-            Framebuffer framebuffer = client.getFramebuffer();
-            NativeImage image = ScreenshotCapture.takeScreenshot(framebuffer);
-            image.writeTo(outputFile);
-            image.close();
-
-            client.player.sendMessage(
-                Text.literal("§a✔ Screenshot z cordami zapisany: §f" + filename), false
-            );
-        } catch (IOException e) {
-            if (client.player != null) {
-                client.player.sendMessage(
-                    Text.literal("§cBłąd podczas zapisu screenshota: " + e.getMessage()), false
-                );
+        // Konwertuj NativeImage -> BufferedImage
+        BufferedImage buffered = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int abgr = nativeImage.getColor(x, y);
+                // NativeImage używa ABGR, konwertuj na ARGB
+                int a = (abgr >> 24) & 0xFF;
+                int b = (abgr >> 16) & 0xFF;
+                int g = (abgr >> 8) & 0xFF;
+                int r = abgr & 0xFF;
+                buffered.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
             }
         }
+        nativeImage.close();
+
+        // Rysuj cordy na obrazie (niewidoczne podczas gry!)
+        Graphics2D g2d = buffered.createGraphics();
+        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+        String line1 = String.format("XYZ: %.2f / %.2f / %.2f", playerX, playerY, playerZ);
+        String line2 = String.format("Block: %d %d %d  |  %s  |  %s",
+                (int)Math.floor(playerX), (int)Math.floor(playerY), (int)Math.floor(playerZ),
+                dimension, timestamp);
+
+        Font font = new Font("Monospaced", Font.BOLD, 16);
+        g2d.setFont(font);
+
+        FontMetrics fm = g2d.getFontMetrics();
+        int padding = 8;
+        int boxW = Math.max(fm.stringWidth(line1), fm.stringWidth(line2)) + padding * 2;
+        int boxH = fm.getHeight() * 2 + padding * 2 + 4;
+        int boxX = 6;
+        int boxY = height - boxH - 6;
+
+        // Tło
+        g2d.setColor(new Color(0, 0, 0, 160));
+        g2d.fillRoundRect(boxX, boxY, boxW, boxH, 8, 8);
+
+        // Obramowanie
+        g2d.setColor(new Color(85, 255, 255, 200));
+        g2d.drawRoundRect(boxX, boxY, boxW, boxH, 8, 8);
+
+        // Tekst
+        g2d.setColor(new Color(255, 255, 85));
+        g2d.drawString(line1, boxX + padding, boxY + padding + fm.getAscent());
+        g2d.setColor(Color.WHITE);
+        g2d.drawString(line2, boxX + padding, boxY + padding + fm.getAscent() + fm.getHeight() + 2);
+
+        g2d.dispose();
+
+        // Zapisz plik
+        File screenshotsDir = new File(client.runDirectory, "screenshots");
+        if (!screenshotsDir.exists()) screenshotsDir.mkdirs();
+        String filename = "coords_" + new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss").format(new Date()) + ".png";
+        ImageIO.write(buffered, "PNG", new File(screenshotsDir, filename));
     }
 }
