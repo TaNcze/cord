@@ -27,12 +27,31 @@ public class CoordScreenshotRenderer {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.player == null) return;
 
-            // Krótkie opóźnienie żeby frame był gotowy
-            new Thread(() -> {
-                try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            // Capture musi być na wątku render (tutaj)
+            Framebuffer framebuffer = client.getFramebuffer();
+            NativeImage nativeImage = ScreenshotCapture.takeScreenshot(framebuffer);
+            int width = nativeImage.getWidth();
+            int height = nativeImage.getHeight();
 
+            // Konwertuj do BufferedImage
+            BufferedImage buffered = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int abgr = nativeImage.getColor(x, y);
+                    int r = abgr & 0xFF;
+                    int g = (abgr >> 8) & 0xFF;
+                    int b = (abgr >> 16) & 0xFF;
+                    buffered.setRGB(x, y, (r << 16) | (g << 8) | b);
+                }
+            }
+            nativeImage.close();
+
+            // Rysowanie i zapis na osobnym wątku (nie blokuje gry)
+            double cx = playerX, cy = playerY, cz = playerZ;
+            String dim = dimension;
+            new Thread(() -> {
                 try {
-                    captureWithCoords(client);
+                    drawAndSave(buffered, cx, cy, cz, dim, client.runDirectory);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -40,69 +59,19 @@ public class CoordScreenshotRenderer {
         });
     }
 
-    private static void captureWithCoords(MinecraftClient client) throws IOException {
-        // Pobierz screenshot z framebuffera
-        Framebuffer framebuffer = client.getFramebuffer();
-        NativeImage nativeImage = ScreenshotCapture.takeScreenshot(framebuffer);
-
-        int width = nativeImage.getWidth();
-        int height = nativeImage.getHeight();
-
-        // Konwertuj NativeImage -> BufferedImage
-        BufferedImage buffered = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int abgr = nativeImage.getColor(x, y);
-                // NativeImage używa ABGR, konwertuj na ARGB
-                int a = (abgr >> 24) & 0xFF;
-                int b = (abgr >> 16) & 0xFF;
-                int g = (abgr >> 8) & 0xFF;
-                int r = abgr & 0xFF;
-                buffered.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
-            }
-        }
-        nativeImage.close();
-
-        // Rysuj cordy na obrazie (niewidoczne podczas gry!)
-        Graphics2D g2d = buffered.createGraphics();
-        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+    private static void drawAndSave(BufferedImage img, double x, double y, double z,
+                                     String dim, File runDir) throws IOException {
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
         String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
-        String line1 = String.format("XYZ: %.2f / %.2f / %.2f", playerX, playerY, playerZ);
+        String line1 = String.format("XYZ: %.2f / %.2f / %.2f", x, y, z);
         String line2 = String.format("Block: %d %d %d  |  %s  |  %s",
-                (int)Math.floor(playerX), (int)Math.floor(playerY), (int)Math.floor(playerZ),
-                dimension, timestamp);
+                (int)Math.floor(x), (int)Math.floor(y), (int)Math.floor(z), dim, timestamp);
 
         Font font = new Font("Monospaced", Font.BOLD, 16);
-        g2d.setFont(font);
+        g.setFont(font);
+        FontMetrics fm = g.getFontMetrics();
 
-        FontMetrics fm = g2d.getFontMetrics();
-        int padding = 8;
-        int boxW = Math.max(fm.stringWidth(line1), fm.stringWidth(line2)) + padding * 2;
-        int boxH = fm.getHeight() * 2 + padding * 2 + 4;
-        int boxX = 6;
-        int boxY = height - boxH - 6;
-
-        // Tło
-        g2d.setColor(new Color(0, 0, 0, 160));
-        g2d.fillRoundRect(boxX, boxY, boxW, boxH, 8, 8);
-
-        // Obramowanie
-        g2d.setColor(new Color(85, 255, 255, 200));
-        g2d.drawRoundRect(boxX, boxY, boxW, boxH, 8, 8);
-
-        // Tekst
-        g2d.setColor(new Color(255, 255, 85));
-        g2d.drawString(line1, boxX + padding, boxY + padding + fm.getAscent());
-        g2d.setColor(Color.WHITE);
-        g2d.drawString(line2, boxX + padding, boxY + padding + fm.getAscent() + fm.getHeight() + 2);
-
-        g2d.dispose();
-
-        // Zapisz plik
-        File screenshotsDir = new File(client.runDirectory, "screenshots");
-        if (!screenshotsDir.exists()) screenshotsDir.mkdirs();
-        String filename = "coords_" + new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss").format(new Date()) + ".png";
-        ImageIO.write(buffered, "PNG", new File(screenshotsDir, filename));
-    }
-}
+        int pad = 8;
+        int boxW = Math.max(fm.stringWidth(line1), fm.stringWidth(line2
